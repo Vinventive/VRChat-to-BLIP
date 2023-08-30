@@ -1,5 +1,6 @@
 # pygetwindow: Used for getting information about windows titles and dimensions.
 # mss: Used for capturing vision inputs.
+# io: Used to store the captured vision input in RAM without saving it as an image file on disk.
 # win32gui: Provides a way to interact with native Windows GUI, used here for getting window dimensions and making a window active.
 # win32con: Constants used for native Windows operations, used here to show a window.
 # time: Required to fix the issue with taking a vision input in the middle of maximizing the window, introduces a short delay before taking a vision input.
@@ -19,6 +20,7 @@
 # - need to add 'psutils' to specify the process and executable for filtering input solely from VRChat.exe, currently captures all windows titled exclusively with 'VRChat' in the title;
 
 
+import io
 import pygetwindow as gw
 import mss
 import win32gui
@@ -77,38 +79,34 @@ def capture_vision_input(auto_detect=False):
     with mss.mss() as sct:
         monitor = {"top": y, "left": x, "width": width, "height": height}
         vision_input = sct.grab(monitor)
-        mss.tools.to_png(vision_input.rgb, vision_input.size, output="vision_input_cache.png")
+        img_bytes = mss.tools.to_png(vision_input.rgb, vision_input.size)
+        vision_feed = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-    print(f"Vision input of {window_title} captured and cached.")
+    print(f"Vision input of {window_title} captured.")
     
     # Minimize the window after capturing
     win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
 
-# Automatically detect 'VRChat' in window titles and captures a vision input
-capture_vision_input(auto_detect=True)
+    return vision_feed
 
+# Automatically detect 'VRChat' in window titles and capture a vision input
+vision_feed = capture_vision_input(auto_detect=True)
 
-# Load cached image
-vision_cache_path = 'vision_input_cache.png' 
-vision_feed = Image.open(vision_cache_path).convert('RGB')   
-print("Cache decoding. \nPlease wait...")
-# Show a preview of vision input cache.
-# vision_feed.show() 
+if vision_feed is not None:
+    print("Cache decoding. \nPlease wait...")
+    # Load model and processor
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Load model and processor
+    MODEL_ID = "Salesforce/blip-image-captioning-large"
+    processor = BlipProcessor.from_pretrained(MODEL_ID)
+    # by default `from_pretrained` loads the weights in float32
+    # we load in float16 instead to save memory
+    model = BlipForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.float16)
+    model.to(device)
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Image captioning
+    inputs = processor(vision_feed, return_tensors="pt").to(device, torch.float16)
 
-MODEL_ID = "Salesforce/blip-image-captioning-large"
-processor = BlipProcessor.from_pretrained(MODEL_ID)
-# by default `from_pretrained` loads the weights in float32
-# we load in float16 instead to save memory
-model = BlipForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.float16)
-model.to(device)
-
-# Image captioning
-inputs = processor(vision_feed, return_tensors="pt").to(device, torch.float16)
-
-generated_ids = model.generate(**inputs, max_new_tokens=20)
-generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-print(f"Encoded result: {generated_text}")
+    generated_ids = model.generate(**inputs, max_new_tokens=20)
+    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+    print(f"Encoded result: {generated_text}")
