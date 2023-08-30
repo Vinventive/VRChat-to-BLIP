@@ -68,7 +68,7 @@ def capture_vision_input(auto_detect=False):
     if placement[1] != win32con.SW_SHOWMAXIMIZED:
         # Maximize the window
         win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-        # Introduce a delay of 3 second
+        # Introduce a delay of 3 seconds
         time.sleep(3)
 
     # Make the window active
@@ -82,31 +82,34 @@ def capture_vision_input(auto_detect=False):
         img_bytes = mss.tools.to_png(vision_input.rgb, vision_input.size)
         vision_feed = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-    print(f"Vision input of {window_title} captured.")
+    print(f"Vision input of {window_title} captured and stored in RAM.")
     
-    # Minimize the window after capturing
-    win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+    # Activate to minimize the window after vision input is captured (single monitor mode)
+#    win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
 
     return vision_feed
 
-# Automatically detect 'VRChat' in window titles and capture a vision input
-vision_feed = capture_vision_input(auto_detect=True)
+# Load model and processor
+device = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL_ID = "Salesforce/blip-image-captioning-large"
+processor = BlipProcessor.from_pretrained(MODEL_ID)
+# by default `from_pretrained` loads the weights in float32
+# we load in float16 instead to save memory
+model = BlipForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.float16)
+model.to(device)
 
-if vision_feed is not None:
-    print("Cache decoding. \nPlease wait...")
-    # Load model and processor
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+while True:  # Vision Encoding Loop
+    # Automatically detect 'VRChat' in window titles and captures a vision input
+    vision_feed = capture_vision_input(auto_detect=True)
 
-    MODEL_ID = "Salesforce/blip-image-captioning-large"
-    processor = BlipProcessor.from_pretrained(MODEL_ID)
-    # by default `from_pretrained` loads the weights in float32
-    # we load in float16 instead to save memory
-    model = BlipForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.float16)
-    model.to(device)
+    if vision_feed is not None:
+        print("Cache decoding. \nPlease wait...")
+        
+        # Image captioning
+        inputs = processor(vision_feed, return_tensors="pt").to(device, torch.float16)
+        generated_ids = model.generate(**inputs, max_new_tokens=20)
+        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+        print(f"Encoded result: {generated_text}")
 
-    # Image captioning
-    inputs = processor(vision_feed, return_tensors="pt").to(device, torch.float16)
-
-    generated_ids = model.generate(**inputs, max_new_tokens=20)
-    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-    print(f"Encoded result: {generated_text}")
+    # Wait 10 seconds before running again
+    time.sleep(10)
